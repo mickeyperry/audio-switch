@@ -5,7 +5,7 @@
 A tiny system-tray app that pops up a clean picker wherever your cursor is — hit a key, click a device, done. No more digging through Windows Sound settings to move audio between headphones, speakers, and monitors.
 
 <p align="center">
-  <img src="screenshot.png" width="420" alt="Audio Switch picker">
+  <img src="demo.gif" width="460" alt="Audio Switch — press F12, pick a device, instant switch">
 </p>
 
 ---
