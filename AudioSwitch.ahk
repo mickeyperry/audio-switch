@@ -14,7 +14,7 @@ SetWorkingDir, %A_ScriptDir%
 ;@Ahk2Exe-SetDescription Audio Switch
 ;@Ahk2Exe-SetProductName Audio Switch
 ;@Ahk2Exe-SetCompanyName Mickey Perry
-;@Ahk2Exe-SetVersion     1.1.0
+;@Ahk2Exe-SetVersion     1.2.0
 ;@Ahk2Exe-SetCopyright   Mickey Perry
 
 ;--- Branding ---------------------------------------------------------------------
@@ -218,10 +218,17 @@ $r = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render'
 $rows = @()
 Get-ChildItem $r | ForEach-Object {
     $state = (Get-ItemProperty $_.PSPath -EA SilentlyContinue).DeviceState
+    if ($state -ne 1) { return }
     $props = Get-ItemProperty "$($_.PSPath)\Properties" -EA SilentlyContinue
-    $n = $props.'{a45c254e-df1c-4efd-8020-67d146a850e0},2'
+    $desc = $props.'{a45c254e-df1c-4efd-8020-67d146a850e0},2'    # PKEY_Device_DeviceDesc        ("Headphones")
+    $adap = $props.'{b3f8fa53-0004-438e-9003-51a46e139bfc},6'    # adapter / controller name      ("OpenCirclet i10")
+    $bus  = $props.'{a45c254e-df1c-4efd-8020-67d146a850e0},24'   # enumerator bus                 ("BTHENUM" = Bluetooth)
     $g = $_.PSChildName
-    if ($n -and $state -eq 1) { $rows += "$n|$g" }
+    if (-not $desc) { $desc = $adap }
+    if (-not $desc) { return }
+    if (-not $adap) { $adap = '' }
+    if ($bus -eq 'BTHENUM') { $adap = if ($adap) { "$adap - Bluetooth" } else { 'Bluetooth' } }
+    $rows += "$desc|$adap|$g"
 }
 $rows | Out-File -FilePath $OutPath -Encoding UTF8
 ), %psFile%
@@ -243,14 +250,16 @@ $rows | Out-File -FilePath $OutPath -Encoding UTF8
         if (line = "")
             continue
         StringSplit, p, line, |
-        if (p0 < 2)
+        if (p0 < 3)
             continue
-        devName := p1
-        devGuid := p2
-        if DeviceMap.HasKey(devName)
+        devDesc := p1          ; device name,  e.g. "Headphones"
+        devSub  := p2          ; adapter name, e.g. "OpenCirclet i10 - Bluetooth"
+        devGuid := p3          ; unique endpoint GUID
+        if DeviceMap.HasKey(devGuid)   ; dedupe by GUID, never by name (multiple devices share "Headphones")
             continue
-        DeviceList.Push({name: devName, guid: devGuid})
-        DeviceMap[devName] := devGuid
+        devFull := (devSub != "") ? devDesc . " (" . devSub . ")" : devDesc
+        DeviceList.Push({main: devDesc, sub: devSub, full: devFull, guid: devGuid})
+        DeviceMap[devGuid] := devFull
     }
 
     ; reset picker state
@@ -293,23 +302,23 @@ $rows | Out-File -FilePath $OutPath -Encoding UTF8
     ; bitmaps are rendered at physical pixel size so they stay crisp on high-DPI displays.
     scale := A_ScreenDPI / 96.0
     cwP := Round(384 * scale)
-    chP := Round(46 * scale)
+    chP := Round(54 * scale)
 
     Loop % count
     {
         dev := DeviceList[A_Index]
         i := A_Index
-        bmpN := MakeCardBmp(cwP, chP, COL_CARD, COL_PINK, "",       COL_TEXT, dev.name, scale)
-        bmpG := MakeCardBmp(cwP, chP, COL_CARD, COL_PINK, COL_GLOW, COL_TEXT, dev.name, scale)
+        bmpN := MakeCardBmp(cwP, chP, COL_CARD, COL_PINK, "",       COL_TEXT, COL_SUB, dev.main, dev.sub, scale)
+        bmpG := MakeCardBmp(cwP, chP, COL_CARD, COL_PINK, COL_GLOW, COL_TEXT, COL_SUB, dev.main, dev.sub, scale)
         ; +0x100 = SS_NOTIFY so the static Picture receives hover/click messages
-        Gui, Picker:Add, Picture, % "x18 y" yPos " w384 h46 +0x100 hwndhCard", % "HBITMAP:*" bmpN
+        Gui, Picker:Add, Picture, % "x18 y" yPos " w384 h54 +0x100 hwndhCard", % "HBITMAP:*" bmpN
         CtrlAction[hCard] := "card:" . i
         CardPic[i]  := hCard
         CardBmpN[i] := bmpN
         CardBmpG[i] := bmpG
         CardBmps.Push(bmpN)
         CardBmps.Push(bmpG)
-        yPos += 56
+        yPos += 64
     }
 
     yPos += 6
@@ -391,7 +400,7 @@ Picker_LButtonDown(wParam, lParam, msg, hwnd) {
         dev := DeviceList[idx]
         PressPulse(idx)
         ClosePicker()
-        SwitchTo(dev.name)
+        SwitchTo(dev.guid, dev.full)
     }
 }
 
@@ -435,7 +444,23 @@ GdiFill(dc, x, y, w, h, hex) {
     DllCall("DeleteObject", "ptr", br)
 }
 
-MakeCardBmp(w, h, bgHex, accentHex, glowHex, txtHex, txt, scale) {
+; Draw one clipped, vertically-centered line of text into a rect band.
+CardText(mdc, txt, colHex, fontH, weight, x, top, right, bottom) {
+    hFont := DllCall("CreateFont", "int", fontH, "int", 0, "int", 0, "int", 0, "int", weight
+        , "uint", 0, "uint", 0, "uint", 0, "uint", 1, "uint", 0, "uint", 0, "uint", 4, "uint", 0
+        , "str", "Segoe UI", "ptr")
+    ofont := DllCall("SelectObject", "ptr", mdc, "ptr", hFont, "ptr")
+    DllCall("SetBkMode", "ptr", mdc, "int", 1)                 ; TRANSPARENT
+    DllCall("SetTextColor", "ptr", mdc, "uint", GdiRGB(colHex))
+    VarSetCapacity(trc, 16, 0)
+    NumPut(x, trc, 0, "int"), NumPut(top, trc, 4, "int"), NumPut(right, trc, 8, "int"), NumPut(bottom, trc, 12, "int")
+    ; DT_SINGLELINE|DT_VCENTER|DT_NOPREFIX|DT_END_ELLIPSIS
+    DllCall("DrawText", "ptr", mdc, "str", txt, "int", -1, "ptr", &trc, "uint", 0x8824)
+    DllCall("SelectObject", "ptr", mdc, "ptr", ofont)
+    DllCall("DeleteObject", "ptr", hFont)
+}
+
+MakeCardBmp(w, h, bgHex, accentHex, glowHex, txtHex, subHex, mainTxt, subTxt, scale) {
     hdc := DllCall("GetDC", "ptr", 0, "ptr")
     mdc := DllCall("CreateCompatibleDC", "ptr", hdc, "ptr")
     hbm := DllCall("CreateCompatibleBitmap", "ptr", hdc, "int", w, "int", h, "ptr")
@@ -452,19 +477,15 @@ MakeCardBmp(w, h, bgHex, accentHex, glowHex, txtHex, txt, scale) {
     aw := Round(5 * scale)
     GdiFill(mdc, inset, inset, aw, h - 2 * inset, accentHex)   ; pink accent bar
 
-    fh := -Round(19 * scale)
-    hFont := DllCall("CreateFont", "int", fh, "int", 0, "int", 0, "int", 0, "int", 600
-        , "uint", 0, "uint", 0, "uint", 0, "uint", 1, "uint", 0, "uint", 0, "uint", 4, "uint", 0
-        , "str", "Segoe UI", "ptr")
-    ofont := DllCall("SelectObject", "ptr", mdc, "ptr", hFont, "ptr")
-    DllCall("SetBkMode", "ptr", mdc, "int", 1)                 ; TRANSPARENT
-    DllCall("SetTextColor", "ptr", mdc, "uint", GdiRGB(txtHex))
-    VarSetCapacity(trc, 16, 0)
-    pad := Round(22 * scale)
-    NumPut(pad, trc, 0, "int"), NumPut(0, trc, 4, "int"), NumPut(w, trc, 8, "int"), NumPut(h, trc, 12, "int")
-    DllCall("DrawText", "ptr", mdc, "str", txt, "int", -1, "ptr", &trc, "uint", 0x24)  ; DT_LEFT|DT_VCENTER|DT_SINGLELINE
-    DllCall("SelectObject", "ptr", mdc, "ptr", ofont)
-    DllCall("DeleteObject", "ptr", hFont)
+    pad  := Round(22 * scale)
+    rpad := w - Round(16 * scale)
+    if (subTxt != "") {
+        ; two lines: bold device name on top, gray adapter subtitle below (mirrors the Windows Sound dialog)
+        CardText(mdc, mainTxt, txtHex, -Round(16 * scale), 700, pad, Round(6 * scale),  rpad, Round(32 * scale))
+        CardText(mdc, subTxt,  subHex, -Round(11 * scale), 400, pad, Round(30 * scale), rpad, h - Round(6 * scale))
+    } else {
+        CardText(mdc, mainTxt, txtHex, -Round(18 * scale), 600, pad, 0, rpad, h)
+    }
 
     DllCall("SelectObject", "ptr", mdc, "ptr", obm)
     DllCall("DeleteDC", "ptr", mdc)
@@ -491,11 +512,10 @@ PickerGuiEscape:
     ClosePicker()
 return
 
-SwitchTo(devName) {
-    global DeviceMap, APP_NAME
-    if !DeviceMap.HasKey(devName)
+SwitchTo(devGuid, devLabel) {
+    global APP_NAME
+    if (devGuid = "")
         return
-    devGuid := DeviceMap[devName]
 
     psSwitch := A_Temp . "\as_set.ps1"
     FileDelete, %psSwitch%
@@ -529,7 +549,7 @@ public static class AudioSwitch {
 
     RunWait, powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%psSwitch%" -g "%devGuid%",, Hide
     FileDelete, %psSwitch%
-    TrayTip, % APP_NAME . " — switched", %devName%, 1
+    TrayTip, % APP_NAME . " — switched", %devLabel%, 1
 }
 
 ;==================================================================================

@@ -26,6 +26,7 @@ One file, ~1.3 MB. No installer, no admin rights, no AutoHotkey needed — it's 
 ## ✨ Features
 
 - **One global hotkey** — switch outputs without leaving your game, call, or DAW. The picker comes to your cursor, on top of everything.
+- **Tells your devices apart** — every output shows its adapter underneath (Bluetooth, Realtek, NVIDIA…), so identical names like two “Headphones” are easy to distinguish — and Bluetooth devices always show up, tagged as such.
 - **Your shortcut, your call** — rebind it to any combo (`Ctrl`+`Alt`+`S`, a spare function key, whatever) in Settings.
 - **Lives in the tray** — clean headphone icon; right-click for Settings / About / one-click Exit.
 - **Draggable & glowing** — move the window by its header, cards glow on hover, and pulse when clicked.
